@@ -25,6 +25,7 @@ import (
 	"github.com/golang/glog"
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	"k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	runtimeapi "k8s.io/kubernetes/pkg/kubelet/apis/cri/runtime/v1alpha2"
@@ -97,7 +98,7 @@ type manager struct {
 var _ Manager = &manager{}
 
 // NewManager creates new cpu manager based on provided policy
-func NewManager(cpuPolicyName string, reconcilePeriod time.Duration, machineInfo *cadvisorapi.MachineInfo, nodeAllocatableReservation v1.ResourceList, stateFileDirectory string) (Manager, error) {
+func NewManager(cpuPolicyName string, reconcilePeriod time.Duration, machineInfo *cadvisorapi.MachineInfo, nodeAllocatableReservation v1.ResourceList, stateFileDirectory string, isolatedCpus cpuset.CPUSet) (Manager, error) {
 	var policy Policy
 
 	switch policyName(cpuPolicyName) {
@@ -116,6 +117,11 @@ func NewManager(cpuPolicyName string, reconcilePeriod time.Duration, machineInfo
 			// The static policy cannot initialize without this information.
 			return nil, fmt.Errorf("[cpumanager] unable to determine reserved CPU resources for static policy")
 		}
+		//If RespectIsolatedCpus is enabled, nodeAllocatableReservation contains both:
+		// - CPUs we want to add to the default CPU sets
+		// - CPUs we want to entirely isolate from Kubernetes
+		// This function separates these so the logic inside the static CPU policy management handles them correctly!
+		reservedCPUs = separateReservationAndIsolation(reservedCPUs, isolatedCpus)
 		if reservedCPUs.IsZero() {
 			// The static policy requires this to be nonzero. Zero CPU reservation
 			// would allow the shared pool to be completely exhausted. At that point
@@ -129,7 +135,7 @@ func NewManager(cpuPolicyName string, reconcilePeriod time.Duration, machineInfo
 		// exclusively allocated.
 		reservedCPUsFloat := float64(reservedCPUs.MilliValue()) / 1000
 		numReservedCPUs := int(math.Ceil(reservedCPUsFloat))
-		policy = NewStaticPolicy(topo, numReservedCPUs)
+		policy = NewStaticPolicy(topo, numReservedCPUs, isolatedCpus)
 
 	default:
 		glog.Errorf("[cpumanager] Unknown policy \"%s\", falling back to default policy \"%s\"", cpuPolicyName, PolicyNone)
@@ -303,4 +309,15 @@ func (m *manager) updateContainerCPUSet(containerID string, cpus cpuset.CPUSet) 
 		&runtimeapi.LinuxContainerResources{
 			CpusetCpus: cpus.String(),
 		})
+}
+
+func separateReservationAndIsolation(reservedCapacity resource.Quantity, isolatedCpus cpuset.CPUSet) resource.Quantity {
+	if isolatedCpus.IsEmpty() {
+		return reservedCapacity
+	}
+	isolatedCapacity := *resource.NewMilliQuantity(
+			int64(isolatedCpus.Size()*1000),
+			resource.DecimalSI)
+	reservedCapacity.Sub(isolatedCapacity)
+	return reservedCapacity
 }

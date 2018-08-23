@@ -45,6 +45,7 @@ import (
 	internalapi "k8s.io/kubernetes/pkg/kubelet/apis/cri"
 	"k8s.io/kubernetes/pkg/kubelet/cadvisor"
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpumanager"
+	"k8s.io/kubernetes/pkg/kubelet/cm/cpuset"
 	"k8s.io/kubernetes/pkg/kubelet/cm/devicemanager"
 	cmutil "k8s.io/kubernetes/pkg/kubelet/cm/util"
 	"k8s.io/kubernetes/pkg/kubelet/config"
@@ -74,6 +75,7 @@ const (
 	dockerPidFile         = "/var/run/docker.pid"
 	containerdProcessName = "docker-containerd"
 	containerdPidFile     = "/run/docker/libcontainerd/docker-containerd.pid"
+	isolatedCpuFile       = "/sys/devices/system/cpu/isolated"
 )
 
 var (
@@ -277,7 +279,15 @@ func NewContainerManager(mountUtil mount.Interface, cadvisorInterface cadvisor.I
 	if err != nil {
 		return nil, err
 	}
-
+	// Read and store list of isolated CPUs if RespectIsolcpus feature is enabled
+	isolatedCpus := cpuset.NewCPUSet()
+	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.RespectIsolcpus) {
+		isolatedCpus, err = readIsolatedCpus()
+		if err != nil {
+			return nil, err
+		}
+		cm.NodeConfig.NodeAllocatableConfig.IsolatedCpus = isolatedCpus
+	}
 	// Initialize CPU manager
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.CPUManager) {
 		cm.cpuManager, err = cpumanager.NewManager(
@@ -286,6 +296,7 @@ func NewContainerManager(mountUtil mount.Interface, cadvisorInterface cadvisor.I
 			machineInfo,
 			cm.GetNodeAllocatableReservation(),
 			nodeConfig.KubeletRootDir,
+			cm.NodeConfig.NodeAllocatableConfig.IsolatedCpus,
 		)
 		if err != nil {
 			glog.Errorf("failed to initialize cpu manager: %v", err)
@@ -876,4 +887,19 @@ func (cm *containerManagerImpl) GetCapacity() v1.ResourceList {
 
 func (cm *containerManagerImpl) GetDevicePluginResourceCapacity() (v1.ResourceList, v1.ResourceList, []string) {
 	return cm.deviceManager.GetCapacity()
+}
+
+// readIsolatedCpus reads the list of CPUs isolated from scheduling via the isolcpus command line kernel parameter
+// information is read from the hosts /sys/devices/system/cpu/isolated structure
+// returns the IDs of the isolated cores as a slice, or an error
+func readIsolatedCpus() (cpuset.CPUSet, error) {
+	isolatedCores, err := ioutil.ReadFile(isolatedCpuFile)
+	if err != nil {
+		return cpuset.NewCPUSet(), err
+	}
+	isolCpuSet, err := cpuset.Parse(string(isolatedCores))
+	if err != nil {
+		return cpuset.NewCPUSet(), err
+	}
+	return isolCpuSet, nil
 }

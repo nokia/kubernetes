@@ -29,7 +29,7 @@ var _ Policy = &nonePolicy{}
 // PolicyNone name of none policy
 const PolicyNone policyName = "none"
 
-// NewNonePolicy returns a cupset manager policy that does nothing
+// NewNonePolicy returns a cpuset manager policy that does nothing
 func NewNonePolicy() Policy {
 	return &nonePolicy{}
 }

@@ -350,6 +350,10 @@ const (
 	//
 	// Enables RuntimeClass, for selecting between multiple runtimes to run a pod.
 	RuntimeClass utilfeature.Feature = "RuntimeClass"
+
+	// owner: @Levovar
+	// alpha: v1.12
+	RespectIsolcpus utilfeature.Feature = "RespectIsolcpus"
 )
 
 func init() {
@@ -409,6 +413,7 @@ var defaultKubernetesFeatureGates = map[utilfeature.Feature]utilfeature.FeatureS
 	ResourceQuotaScopeSelectors:                 {Default: true, PreRelease: utilfeature.Beta},
 	CSIBlockVolume:                              {Default: false, PreRelease: utilfeature.Alpha},
 	RuntimeClass:                                {Default: false, PreRelease: utilfeature.Alpha},
+	RespectIsolcpus:                             {Default: false, PreRelease: utilfeature.Alpha},
 
 	// inherited features from generic apiserver, relisted here to get a conflict if it is changed
 	// unintentionally on either side:

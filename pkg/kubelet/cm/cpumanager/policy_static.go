@@ -73,6 +73,8 @@ type staticPolicy struct {
 	topology *topology.CPUTopology
 	// set of CPUs that is not available for exclusive assignment
 	reserved cpuset.CPUSet
+	// a subset of the reserved CPU set, these cores are totally isolated from the Kubernetes CPU manager
+	isolated cpuset.CPUSet
 }
 
 // Ensure staticPolicy implements Policy interface
@@ -81,7 +83,7 @@ var _ Policy = &staticPolicy{}
 // NewStaticPolicy returns a CPU manager policy that does not change CPU
 // assignments for exclusively pinned guaranteed containers after the main
 // container process starts.
-func NewStaticPolicy(topology *topology.CPUTopology, numReservedCPUs int) Policy {
+func NewStaticPolicy(topology *topology.CPUTopology, numReservedCPUs int, isolatedCpuSet cpuset.CPUSet) Policy {
 	allCPUs := topology.CPUDetails.CPUs()
 	// takeByTopology allocates CPUs associated with low-numbered cores from
 	// allCPUs.
@@ -89,16 +91,18 @@ func NewStaticPolicy(topology *topology.CPUTopology, numReservedCPUs int) Policy
 	// For example: Given a system with 8 CPUs available and HT enabled,
 	// if numReservedCPUs=2, then reserved={0,4}
 	reserved, _ := takeByTopology(topology, allCPUs, numReservedCPUs)
-
 	if reserved.Size() != numReservedCPUs {
 		panic(fmt.Sprintf("[cpumanager] unable to reserve the required amount of CPUs (size of %s did not equal %d)", reserved, numReservedCPUs))
 	}
+	// If system contains CPUs isolated via isolcpus kernel parameter, and the RespectIsolCpus is enabled, we need to expand the number of restricted cores with this list
+	reserved = addIsolatedCoresToSet(reserved, isolatedCpuSet)
 
 	glog.Infof("[cpumanager] reserved %d CPUs (\"%s\") not available for exclusive assignment", reserved.Size(), reserved)
 
 	return &staticPolicy{
 		topology: topology,
 		reserved: reserved,
+		isolated: isolatedCpuSet,
 	}
 }
 
@@ -124,6 +128,8 @@ func (p *staticPolicy) validateState(s state.State) error {
 		}
 		// state is empty initialize
 		allCPUs := p.topology.CPUDetails.CPUs()
+		//TODO: check this with experts whether this radical change can cause problems, but my gut feeling is that not even the default CPU set should contain the isolated cores
+		allCPUs = removeIsolatedCoresFromSet(allCPUs, p.isolated)
 		s.SetDefaultCPUSet(allCPUs)
 		return nil
 	}
@@ -226,4 +232,20 @@ func guaranteedCPUs(pod *v1.Pod, container *v1.Container) int {
 	// Per the language spec, `int` is guaranteed to be at least 32 bits wide.
 	// https://golang.org/ref/spec#Numeric_types
 	return int(cpuQuantity.Value())
+}
+
+func addIsolatedCoresToSet(baseSet cpuset.CPUSet, isolatedCpuSet cpuset.CPUSet) cpuset.CPUSet {
+	//Feature is disabled, or there are no cores isolated on the kernel level
+	if isolatedCpuSet.IsEmpty() {
+		return baseSet
+	}
+	return baseSet.Union(isolatedCpuSet)
+}
+
+func removeIsolatedCoresFromSet(baseSet cpuset.CPUSet, isolatedCpuSet cpuset.CPUSet) cpuset.CPUSet {
+	//Feature is disabled, or there are no cores isolated on the kernel level
+	if isolatedCpuSet.IsEmpty() {
+		return baseSet
+	}
+	return baseSet.Difference(isolatedCpuSet)
 }

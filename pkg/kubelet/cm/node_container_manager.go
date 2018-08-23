@@ -210,6 +210,18 @@ func (cm *containerManagerImpl) GetNodeAllocatableReservation() v1.ResourceList 
 			result[k] = *value
 		}
 	}
+	//If RespectIsolCpus feature is turned on and the Node has isolated CPUs,
+	//On one hand, we need to add their total capacity to the list of reserved CPU capacity so Nodes always report the correct available capacity.
+	//On the other hand, this function is also called by the CPU manager upon its creation, so counting the isolated cores here is double-bookkeeping.
+	//We will take care of re-adjusting this back to the proper value inside the CPU manager!
+	if !cm.NodeConfig.NodeAllocatableConfig.IsolatedCpus.IsEmpty() {
+		isolatedCapacity := *resource.NewMilliQuantity(
+				int64(cm.NodeConfig.NodeAllocatableConfig.IsolatedCpus.Size()*1000),
+				resource.DecimalSI)
+		tempVal := result[v1.ResourceCPU]
+		tempVal.Add(isolatedCapacity)
+		result[v1.ResourceCPU] = tempVal
+	}
 	return result
 }
 
