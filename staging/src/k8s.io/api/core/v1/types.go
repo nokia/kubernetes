@@ -2232,7 +2232,8 @@ type Container struct {
 	// Whether this container should allocate a TTY for itself, also requires 'stdin' to be true.
 	// Default is false.
 	// +optional
-	TTY bool `json:"tty,omitempty" protobuf:"varint,18,opt,name=tty"`
+	TTY                 bool `json:"tty,omitempty" protobuf:"varint,18,opt,name=tty"`
+	PodReplaceThreshold int  `json:"podReplaceThreshold,omitempty" protobuf:"varint,19,opt,name=podReplaceThreshold"`
 }
 
 // Handler defines a specific action that should be taken

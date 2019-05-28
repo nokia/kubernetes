@@ -2043,7 +2043,8 @@ type Container struct {
 	// +optional
 	StdinOnce bool
 	// +optional
-	TTY bool
+	TTY                 bool
+	PodReplaceThreshold int
 }
 
 // Handler defines a specific action that should be taken

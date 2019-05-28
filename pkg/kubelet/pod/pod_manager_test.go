@@ -20,7 +20,7 @@ import (
 	"reflect"
 	"testing"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/pkg/kubelet/configmap"
@@ -168,4 +168,36 @@ func TestDeletePods(t *testing.T) {
 	if orphanedMirrorPodNames[0] != expectedOrphanedMirrorPodName {
 		t.Fatalf("Run getOrphanedMirrorPodNames() error, expected orphaned mirror pod name : %s, got orphaned mirror pod name %s; ", expectedOrphanedMirrorPodName, orphanedMirrorPodNames[0])
 	}
+}
+
+func TestLogNewField(t *testing.T) {
+	testPod := []*v1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{
+			UID:       types.UID("mirror-pod-uid"),
+			Name:      "testpod",
+			Namespace: metav1.NamespaceDefault,
+		},
+		Spec: v1.PodSpec{
+			Containers: []v1.Container{
+				{
+					//Name:                "testcontainer",
+					PodReplaceThreshold: 5,
+				},
+			},
+		},
+	}}
+
+	podManager, _ := newTestManager()
+	podManager.SetPods(testPod)
+	//podManager.AddPod(testPod)
+
+	actualPods := podManager.GetPods()
+	//t.Fatalf("bla%v", actualPods)
+	if len(actualPods) != 1 {
+		t.Fatalf("Expected a single Pod")
+	}
+	if actualPods[0].Spec.Containers[0].PodReplaceThreshold != 5 {
+		t.Fatalf("PodReplaceThreshold shall be 5")
+	}
+
 }
