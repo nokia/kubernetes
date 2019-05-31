@@ -417,6 +417,14 @@ func (m *kubeGenericRuntimeManager) podSandboxChanged(pod *v1.Pod, podStatus *ku
 		}
 	}
 
+	for _, c := range pod.Spec.Containers {
+
+		if podStatus.FindContainerStatusByName(c.Name).RestartCount >= c.PodReplaceThreshold {
+			klog.V(2).Infof("Pod should be restarted here. LOOK FOR ME")
+		}
+
+	}
+
 	// Needs to create a new sandbox when readySandboxCount > 1 or the ready sandbox is not the latest one.
 	sandboxStatus := podStatus.SandboxStatuses[0]
 	if readySandboxCount > 1 {
