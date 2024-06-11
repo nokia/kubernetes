@@ -686,6 +686,7 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 		if err != nil {
 			return err
 		}
+		s.SystemReserved["exclusive-cpu"] = s.SystemReserved["cpu"]
 		systemReserved, err := parseResourceList(s.SystemReserved)
 		if err != nil {
 			return err
@@ -709,6 +710,16 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 		if utilfeature.DefaultFeatureGate.Enabled(features.CPUManager) {
 			if utilfeature.DefaultFeatureGate.Enabled(features.CPUManagerPolicyOptions) {
 				cpuManagerPolicyOptions = s.CPUManagerPolicyOptions
+				// take care of numMinSharedCPUs in case of strict-cpu-reservation
+				strictCPUReservation, ok := cpuManagerPolicyOptions["strict-cpu-reservation"]
+				if ok {
+					strict, _ := strconv.ParseBool(strictCPUReservation)
+					if strict {
+						res := systemReserved[v1.ResourceExclusiveCPU].DeepCopy()
+						res.Add(*resource.NewMilliQuantity(int64(int(s.NumMinSharedCPUs)*1000), resource.DecimalSI))
+						systemReserved[v1.ResourceExclusiveCPU] = res
+					}
+				}
 			} else if s.CPUManagerPolicyOptions != nil {
 				return fmt.Errorf("CPU Manager policy options %v require feature gates %q, %q enabled",
 					s.CPUManagerPolicyOptions, features.CPUManager, features.CPUManagerPolicyOptions)
@@ -735,6 +746,7 @@ func run(ctx context.Context, s *options.KubeletServer, kubeDeps *kubelet.Depend
 					KubeReserved:             kubeReserved,
 					SystemReserved:           systemReserved,
 					ReservedSystemCPUs:       reservedSystemCPUs,
+					NumMinSharedCPUs:         s.NumMinSharedCPUs,
 					HardEvictionThresholds:   hardEvictionThresholds,
 				},
 				QOSReserved:                             *experimentalQOSReserved,
@@ -1251,7 +1263,7 @@ func parseResourceList(m map[string]string) (v1.ResourceList, error) {
 	for k, v := range m {
 		switch v1.ResourceName(k) {
 		// CPU, memory, local storage, and PID resources are supported.
-		case v1.ResourceCPU, v1.ResourceMemory, v1.ResourceEphemeralStorage, pidlimit.PIDs:
+		case v1.ResourceCPU, v1.ResourceExclusiveCPU, v1.ResourceMemory, v1.ResourceEphemeralStorage, pidlimit.PIDs:
 			q, err := resource.ParseQuantity(v)
 			if err != nil {
 				return nil, err

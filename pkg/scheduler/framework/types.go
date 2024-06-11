@@ -30,6 +30,7 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
+	v1qos "k8s.io/kubernetes/pkg/apis/core/v1/helper/qos"
 	schedutil "k8s.io/kubernetes/pkg/scheduler/util"
 )
 
@@ -410,9 +411,10 @@ func nextGeneration() int64 {
 
 // Resource is a collection of compute resource.
 type Resource struct {
-	MilliCPU         int64
-	Memory           int64
-	EphemeralStorage int64
+	MilliCPU          int64
+	ExclusiveMilliCPU int64
+	Memory            int64
+	EphemeralStorage  int64
 	// We store allowedPodNumber (which is Node.Status.Allocatable.Pods().Value())
 	// explicitly as int, to avoid conversions and improve performance.
 	AllowedPodNumber int
@@ -437,6 +439,8 @@ func (r *Resource) Add(rl v1.ResourceList) {
 		switch rName {
 		case v1.ResourceCPU:
 			r.MilliCPU += rQuant.MilliValue()
+		case v1.ResourceExclusiveCPU:
+			r.ExclusiveMilliCPU += rQuant.MilliValue()
 		case v1.ResourceMemory:
 			r.Memory += rQuant.Value()
 		case v1.ResourcePods:
@@ -454,10 +458,11 @@ func (r *Resource) Add(rl v1.ResourceList) {
 // Clone returns a copy of this resource.
 func (r *Resource) Clone() *Resource {
 	res := &Resource{
-		MilliCPU:         r.MilliCPU,
-		Memory:           r.Memory,
-		AllowedPodNumber: r.AllowedPodNumber,
-		EphemeralStorage: r.EphemeralStorage,
+		MilliCPU:          r.MilliCPU,
+		ExclusiveMilliCPU: r.ExclusiveMilliCPU,
+		Memory:            r.Memory,
+		AllowedPodNumber:  r.AllowedPodNumber,
+		EphemeralStorage:  r.EphemeralStorage,
 	}
 	if r.ScalarResources != nil {
 		res.ScalarResources = make(map[v1.ResourceName]int64)
@@ -494,6 +499,8 @@ func (r *Resource) SetMaxResource(rl v1.ResourceList) {
 			r.Memory = max(r.Memory, rQuantity.Value())
 		case v1.ResourceCPU:
 			r.MilliCPU = max(r.MilliCPU, rQuantity.MilliValue())
+		case v1.ResourceExclusiveCPU:
+			r.ExclusiveMilliCPU = max(r.ExclusiveMilliCPU, rQuantity.MilliValue())
 		case v1.ResourceEphemeralStorage:
 			r.EphemeralStorage = max(r.EphemeralStorage, rQuantity.Value())
 		default:
@@ -583,6 +590,14 @@ func (n *NodeInfo) String() string {
 func (n *NodeInfo) AddPodInfo(podInfo *PodInfo) {
 	res, non0CPU, non0Mem := calculateResource(podInfo.Pod)
 	n.Requested.MilliCPU += res.MilliCPU
+	res.ExclusiveMilliCPU = 0
+	if v1qos.GetPodQOS(podInfo.Pod) == v1.PodQOSGuaranteed {
+		if res.MilliCPU%1000 == 0 {
+			klog.V(3).Infof("AddPodInfo - Exlusive CPU request %d", res.MilliCPU)
+			res.ExclusiveMilliCPU = res.MilliCPU
+		}
+	}
+	n.Requested.ExclusiveMilliCPU += res.ExclusiveMilliCPU
 	n.Requested.Memory += res.Memory
 	n.Requested.EphemeralStorage += res.EphemeralStorage
 	if n.Requested.ScalarResources == nil && len(res.ScalarResources) > 0 {
@@ -606,6 +621,10 @@ func (n *NodeInfo) AddPodInfo(podInfo *PodInfo) {
 	n.updatePVCRefCounts(podInfo.Pod, true)
 
 	n.Generation = nextGeneration()
+
+        if res.ExclusiveMilliCPU > 0 {
+	    klog.V(3).Infof("node: %s, info: %s", n.node.ObjectMeta.Name, n.String())
+        }
 }
 
 // AddPod is a wrapper around AddPodInfo.
@@ -668,6 +687,15 @@ func (n *NodeInfo) RemovePod(pod *v1.Pod) error {
 			res, non0CPU, non0Mem := calculateResource(pod)
 
 			n.Requested.MilliCPU -= res.MilliCPU
+			// Set exclusive cpu request
+			res.ExclusiveMilliCPU = 0
+			if v1qos.GetPodQOS(pod) == v1.PodQOSGuaranteed {
+				if res.MilliCPU%1000 == 0 {
+					klog.V(3).Infof("RemovePod - Exlusive CPU request %d", res.MilliCPU)
+					res.ExclusiveMilliCPU = res.MilliCPU
+				}
+			}
+			n.Requested.ExclusiveMilliCPU -= res.ExclusiveMilliCPU
 			n.Requested.Memory -= res.Memory
 			n.Requested.EphemeralStorage -= res.EphemeralStorage
 			if len(res.ScalarResources) > 0 && n.Requested.ScalarResources == nil {
@@ -685,6 +713,11 @@ func (n *NodeInfo) RemovePod(pod *v1.Pod) error {
 
 			n.Generation = nextGeneration()
 			n.resetSlicesIfEmpty()
+
+                        if res.ExclusiveMilliCPU > 0 {
+			  klog.V(3).Infof("node: %s, info: %s", n.node.ObjectMeta.Name, n.String())
+                        }
+
 			return nil
 		}
 	}

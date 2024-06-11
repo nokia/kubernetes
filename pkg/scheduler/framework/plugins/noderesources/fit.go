@@ -24,7 +24,9 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/klog/v2"
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
+	v1qos "k8s.io/kubernetes/pkg/apis/core/v1/helper/qos"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/validation"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
@@ -163,6 +165,14 @@ func computePodResourceRequest(pod *v1.Pod) *preFilterState {
 		result.Add(container.Resources.Requests)
 	}
 
+	// Set exclusive cpu request
+	result.ExclusiveMilliCPU = 0
+	if v1qos.GetPodQOS(pod) == v1.PodQOSGuaranteed {
+		if result.MilliCPU%1000 == 0 {
+			result.ExclusiveMilliCPU = result.MilliCPU
+		}
+	}
+
 	// take max_resource(sum_pod, any_init_container)
 	for _, container := range pod.Spec.InitContainers {
 		result.SetMaxResource(container.Resources.Requests)
@@ -251,7 +261,9 @@ func Fits(pod *v1.Pod, nodeInfo *framework.NodeInfo) []InsufficientResource {
 }
 
 func fitsRequest(podRequest *preFilterState, nodeInfo *framework.NodeInfo, ignoredExtendedResources, ignoredResourceGroups sets.String) []InsufficientResource {
-	insufficientResources := make([]InsufficientResource, 0, 4)
+	node := nodeInfo.Node()
+	klog.V(3).Infof("fitsRequest() called for %d-%d on %s", podRequest.MilliCPU, podRequest.ExclusiveMilliCPU, node.ObjectMeta.Name)
+	insufficientResources := []InsufficientResource{}
 
 	allowedPodNumber := nodeInfo.Allocatable.AllowedPodNumber
 	if len(nodeInfo.Pods)+1 > allowedPodNumber {
@@ -279,6 +291,19 @@ func fitsRequest(podRequest *preFilterState, nodeInfo *framework.NodeInfo, ignor
 			Used:         nodeInfo.Requested.MilliCPU,
 			Capacity:     nodeInfo.Allocatable.MilliCPU,
 		})
+	}
+	if nodeInfo.Allocatable.ExclusiveMilliCPU > 0 {
+		if podRequest.ExclusiveMilliCPU > 0 && podRequest.ExclusiveMilliCPU > (nodeInfo.Allocatable.ExclusiveMilliCPU-nodeInfo.Requested.ExclusiveMilliCPU) {
+			klog.V(3).Infof("MilliCPU - Allocatable: %d, Requested %d", nodeInfo.Allocatable.MilliCPU, nodeInfo.Requested.MilliCPU)
+			klog.V(3).Infof("ExclusiveMilliCPU - Allocatable: %d, Requested %d", nodeInfo.Allocatable.ExclusiveMilliCPU, nodeInfo.Requested.ExclusiveMilliCPU)
+			insufficientResources = append(insufficientResources, InsufficientResource{
+				ResourceName: v1.ResourceExclusiveCPU,
+				Reason:       "Insufficient exclusive cpu",
+				Requested:    podRequest.ExclusiveMilliCPU,
+				Used:         nodeInfo.Requested.ExclusiveMilliCPU,
+				Capacity:     nodeInfo.Allocatable.ExclusiveMilliCPU,
+			})
+		}
 	}
 	if podRequest.Memory > (nodeInfo.Allocatable.Memory - nodeInfo.Requested.Memory) {
 		insufficientResources = append(insufficientResources, InsufficientResource{
