@@ -105,8 +105,10 @@ const (
 	ManagedEphemeralContainersKey = "managed_ephemeral_containers"
 
 	// Metrics to track the CPU manager behavior
-	CPUManagerPinningRequestsTotalKey = "cpu_manager_pinning_requests_total"
-	CPUManagerPinningErrorsTotalKey   = "cpu_manager_pinning_errors_total"
+	CPUManagerPinningRequestsTotalKey         = "cpu_manager_pinning_requests_total"
+	CPUManagerPinningErrorsTotalKey           = "cpu_manager_pinning_errors_total"
+	CPUManagerSharedPoolSizeMilliCoresKey     = "cpu_manager_shared_pool_size_millicores"
+	CPUManagerExclusiveCPUsAllocationCountKey = "cpu_manager_exclusive_cpu_allocation_count"
 
 	// Metrics to track the Topology manager behavior
 	TopologyManagerAdmissionRequestsTotalKey = "topology_manager_admission_requests_total"
@@ -719,6 +721,26 @@ var (
 		},
 	)
 
+	// CPUManagerSharedPoolSizeMilliCores reports the current size of the shared CPU pool for non-guaranteed pods
+	CPUManagerSharedPoolSizeMilliCores = metrics.NewGauge(
+		&metrics.GaugeOpts{
+			Subsystem:      KubeletSubsystem,
+			Name:           CPUManagerSharedPoolSizeMilliCoresKey,
+			Help:           "The size of the shared CPU pool for non-guaranteed QoS pods, in millicores.",
+			StabilityLevel: metrics.ALPHA,
+		},
+	)
+
+	// CPUManagerExclusiveCPUsAllocationCount reports the total number of CPUs exclusively allocated to containers running on this node
+	CPUManagerExclusiveCPUsAllocationCount = metrics.NewGauge(
+		&metrics.GaugeOpts{
+			Subsystem:      KubeletSubsystem,
+			Name:           CPUManagerExclusiveCPUsAllocationCountKey,
+			Help:           "The total number of CPUs exclusively allocated to containers running on this node",
+			StabilityLevel: metrics.ALPHA,
+		},
+	)
+
 	// TopologyManagerAdmissionRequestsTotal tracks the number of times the pod spec will cause the topology manager to admit a pod
 	TopologyManagerAdmissionRequestsTotal = metrics.NewCounter(
 		&metrics.CounterOpts{
@@ -887,6 +909,8 @@ func Register(collectors ...metrics.StableCollector) {
 		legacyregistry.MustRegister(RunPodSandboxErrors)
 		legacyregistry.MustRegister(CPUManagerPinningRequestsTotal)
 		legacyregistry.MustRegister(CPUManagerPinningErrorsTotal)
+		legacyregistry.MustRegister(CPUManagerSharedPoolSizeMilliCores)
+		legacyregistry.MustRegister(CPUManagerExclusiveCPUsAllocationCount)
 		legacyregistry.MustRegister(TopologyManagerAdmissionRequestsTotal)
 		legacyregistry.MustRegister(TopologyManagerAdmissionErrorsTotal)
 		legacyregistry.MustRegister(TopologyManagerAdmissionDuration)
