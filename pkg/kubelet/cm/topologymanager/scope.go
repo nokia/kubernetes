@@ -46,6 +46,9 @@ type Scope interface {
 	// AddHintProvider adds a hint provider to manager to indicate the hint provider
 	// wants to be consoluted with when making topology hints
 	AddHintProvider(h HintProvider)
+	// SetPreferredSingleNUMATieBreaker registers a tie-breaker for single-numa-node policy
+	// when prefer-most-allocated-numa-node is enabled (e.g. static CPU manager).
+	SetPreferredSingleNUMATieBreaker(breaker PreferredSingleNUMATieBreaker)
 	// AddContainer adds pod to Manager for tracking
 	AddContainer(pod *v1.Pod, container *v1.Container, containerID string)
 	// RemoveContainer removes pod from Manager tracking
@@ -98,6 +101,12 @@ func (s *scope) GetPolicy() Policy {
 
 func (s *scope) AddHintProvider(h HintProvider) {
 	s.hintProviders = append(s.hintProviders, h)
+}
+
+func (s *scope) SetPreferredSingleNUMATieBreaker(breaker PreferredSingleNUMATieBreaker) {
+	if snp, ok := s.policy.(*singleNumaNodePolicy); ok {
+		snp.setPreferredSingleNUMATieBreaker(breaker)
+	}
 }
 
 // It would be better to implement this function in topologymanager instead of scope

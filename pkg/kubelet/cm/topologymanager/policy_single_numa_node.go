@@ -16,12 +16,19 @@ limitations under the License.
 
 package topologymanager
 
-import "k8s.io/klog/v2"
+import (
+	"sync"
+
+	"k8s.io/klog/v2"
+)
 
 type singleNumaNodePolicy struct {
 	// numaInfo represents list of NUMA Nodes available on the underlying machine and distances between them
 	numaInfo *NUMAInfo
 	opts     PolicyOptions
+
+	tieBreakMu sync.Mutex
+	tieBreak   PreferredSingleNUMATieBreaker
 }
 
 var _ Policy = &singleNumaNodePolicy{}
@@ -32,6 +39,18 @@ const PolicySingleNumaNode string = "single-numa-node"
 // NewSingleNumaNodePolicy returns single-numa-node policy.
 func NewSingleNumaNodePolicy(numaInfo *NUMAInfo, opts PolicyOptions) Policy {
 	return &singleNumaNodePolicy{numaInfo: numaInfo, opts: opts}
+}
+
+func (p *singleNumaNodePolicy) setPreferredSingleNUMATieBreaker(b PreferredSingleNUMATieBreaker) {
+	p.tieBreakMu.Lock()
+	defer p.tieBreakMu.Unlock()
+	p.tieBreak = b
+}
+
+func (p *singleNumaNodePolicy) getPreferredSingleNUMATieBreaker() PreferredSingleNUMATieBreaker {
+	p.tieBreakMu.Lock()
+	defer p.tieBreakMu.Unlock()
+	return p.tieBreak
 }
 
 func (p *singleNumaNodePolicy) Name() string {
@@ -65,7 +84,7 @@ func (p *singleNumaNodePolicy) Merge(logger klog.Logger, providersHints []map[st
 	// Filter to only include don't cares and hints with a single NUMA node.
 	singleNumaHints := filterSingleNumaHints(filteredHints)
 
-	merger := NewHintMerger(p.numaInfo, singleNumaHints, p.Name(), p.opts)
+	merger := NewHintMerger(p.numaInfo, singleNumaHints, p.Name(), p.opts, p.getPreferredSingleNUMATieBreaker())
 	bestHint := merger.Merge()
 
 	if bestHint.NUMANodeAffinity.IsEqual(p.numaInfo.DefaultAffinityMask()) {

@@ -35,6 +35,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/containermap"
 	"k8s.io/kubernetes/pkg/kubelet/cm/memorymanager/state"
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager"
+	tmbitmask "k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
 	"k8s.io/kubernetes/pkg/kubelet/config"
 	"k8s.io/kubernetes/pkg/kubelet/status"
 )
@@ -95,6 +96,12 @@ type Manager interface {
 
 	// GetMemory returns the memory allocated by a container from NUMA nodes
 	GetMemory(podUID, containerName string) []state.Block
+
+	// ComparePreferredSingleNUMAForTopology breaks ties between preferred single-NUMA hints
+	// for topology manager when prefer-most-allocated-numa-node is enabled. Uses regular
+	// memory (ResourceMemory) only—no huge pages. Returns ok=false when the memory manager
+	// does not supply this signal (non-static policy) or when the two NUMAs tie.
+	ComparePreferredSingleNUMAForTopology(current, candidate tmbitmask.BitMask) (preferCandidate bool, ok bool)
 }
 
 type manager struct {
@@ -493,4 +500,55 @@ func (m *manager) GetAllocatableMemory() []state.Block {
 // GetMemory returns the memory allocated by a container from NUMA nodes
 func (m *manager) GetMemory(podUID, containerName string) []state.Block {
 	return m.state.GetMemoryBlocks(podUID, containerName)
+}
+
+func (m *manager) ComparePreferredSingleNUMAForTopology(current, candidate tmbitmask.BitMask) (preferCandidate bool, ok bool) {
+	m.Lock()
+	defer m.Unlock()
+	_, isStatic := m.policy.(*staticPolicy)
+	if !isStatic {
+		return false, false
+	}
+	curBits := current.GetBits()
+	candBits := candidate.GetBits()
+	if len(curBits) != 1 || len(candBits) != 1 {
+		return false, false
+	}
+	machineState := m.state.GetMachineState()
+	s0 := getMostAllocatedNUMAScore(
+		getRegularMemoryAssignedBytesOnNUMANode(m.state, curBits[0]),
+		getAllocatableRegularMemoryOnNUMANode(machineState, curBits[0]),
+	)
+	s1 := getMostAllocatedNUMAScore(
+		getRegularMemoryAssignedBytesOnNUMANode(m.state, candBits[0]),
+		getAllocatableRegularMemoryOnNUMANode(machineState, candBits[0]),
+	)
+	if s0 == s1 {
+		return false, false
+	}
+	return s1 > s0, true
+}
+
+func getAllocatableRegularMemoryOnNUMANode(machineState state.NUMANodeMap, numa int) uint64 {
+	ns, ok := machineState[numa]
+	if !ok {
+		return 0
+	}
+	mt, ok := ns.MemoryMap[v1.ResourceMemory]
+	if !ok {
+		return 0
+	}
+	return mt.Allocatable
+}
+
+// getMostAllocatedNUMAScore mirrors kube-scheduler's mostRequestedScore:
+// (requested * 100) / capacity.  Returns 0 when capacity is zero.
+func getMostAllocatedNUMAScore(requested, capacity uint64) int64 {
+	if capacity == 0 {
+		return 0
+	}
+	if requested > capacity {
+		requested = capacity
+	}
+	return int64((requested * 100) / capacity)
 }

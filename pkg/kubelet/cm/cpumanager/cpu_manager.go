@@ -38,6 +38,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpumanager/topology"
 	cmqos "k8s.io/kubernetes/pkg/kubelet/cm/qos"
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager"
+	tmbitmask "k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
 	"k8s.io/kubernetes/pkg/kubelet/config"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/status"
@@ -110,6 +111,11 @@ type Manager interface {
 
 	// GetResourceIsolationLevel returns the isolation level of the container.
 	GetResourceIsolationLevel(pod *v1.Pod, container *v1.Container) cmqos.ResourceIsolationLevel
+
+	// ComparePreferredSingleNUMAForTopology breaks ties between preferred single-NUMA hints
+	// for topology manager when prefer-most-allocated-numa-node is enabled. Returns ok=false
+	// when the CPU manager does not supply this signal (non-static policy).
+	ComparePreferredSingleNUMAForTopology(current, candidate tmbitmask.BitMask) (preferCandidate bool, ok bool)
 }
 
 type manager struct {
@@ -589,4 +595,42 @@ func (m *manager) GetResourceIsolationLevel(pod *v1.Pod, container *v1.Container
 	}
 
 	return cmqos.ResourceIsolationContainer
+}
+
+func (m *manager) ComparePreferredSingleNUMAForTopology(current, candidate tmbitmask.BitMask) (preferCandidate bool, ok bool) {
+	m.Lock()
+	defer m.Unlock()
+	sp, static := m.policy.(*staticPolicy)
+	if !static {
+		return false, false
+	}
+	curBits := current.GetBits()
+	candBits := candidate.GetBits()
+	if len(curBits) != 1 || len(candBits) != 1 {
+		return false, false
+	}
+	s0 := getMostAllocatedNUMAScore(
+		int64(sp.getExclusiveAssignedCPUsOnNUMANode(m.state, curBits[0])),
+		int64(sp.getAllocatableExclusiveCPUsOnNUMANode(curBits[0])),
+	)
+	s1 := getMostAllocatedNUMAScore(
+		int64(sp.getExclusiveAssignedCPUsOnNUMANode(m.state, candBits[0])),
+		int64(sp.getAllocatableExclusiveCPUsOnNUMANode(candBits[0])),
+	)
+	if s0 == s1 {
+		return false, false
+	}
+	return s1 > s0, true
+}
+
+// getMostAllocatedNUMAScore mirrors kube-scheduler's mostRequestedScore:
+// (requested * 100) / capacity.  Returns 0 when capacity is zero.
+func getMostAllocatedNUMAScore(requested, capacity int64) int64 {
+	if capacity == 0 {
+		return 0
+	}
+	if requested > capacity {
+		requested = capacity
+	}
+	return (requested * 100) / capacity
 }

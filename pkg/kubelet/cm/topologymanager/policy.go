@@ -147,11 +147,22 @@ type HintMerger struct {
 	CompareNUMAAffinityMasks      func(candidate *TopologyHint, current *TopologyHint) (best *TopologyHint)
 }
 
-func NewHintMerger(numaInfo *NUMAInfo, hints [][]TopologyHint, policyName string, opts PolicyOptions) HintMerger {
+func NewHintMerger(numaInfo *NUMAInfo, hints [][]TopologyHint, policyName string, opts PolicyOptions, tieBreak PreferredSingleNUMATieBreaker) HintMerger {
 	compareNumaAffinityMasks := func(current, candidate *TopologyHint) *TopologyHint {
 		// If current and candidate bitmasks are the same, prefer current hint.
 		if candidate.NUMANodeAffinity.IsEqual(current.NUMANodeAffinity) {
 			return current
+		}
+
+		if policyName == PolicySingleNumaNode && opts.PreferMostAllocatedNUMANode && tieBreak != nil &&
+			current.NUMANodeAffinity != nil && candidate.NUMANodeAffinity != nil &&
+			current.NUMANodeAffinity.Count() == 1 && candidate.NUMANodeAffinity.Count() == 1 {
+			if pick, ok := tieBreak.ComparePreferredSingleNUMAForTopology(current.NUMANodeAffinity, candidate.NUMANodeAffinity); ok {
+				if pick {
+					return candidate
+				}
+				return current
+			}
 		}
 
 		// Otherwise compare the hints, based on the policy options provided
