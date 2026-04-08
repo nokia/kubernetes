@@ -813,6 +813,30 @@ func getTotalAssignedExclusiveCPUs(s state.State) cpuset.CPUSet {
 	return totalAssignedCPUs
 }
 
+func getAssignedExclusiveCPUs(s state.State) cpuset.CPUSet {
+	totalAssignedCPUs := cpuset.New()
+	for _, assignment := range s.GetCPUAssignments() {
+		for _, cset := range assignment {
+			totalAssignedCPUs = totalAssignedCPUs.Union(cset)
+		}
+	}
+	return totalAssignedCPUs
+}
+
+func (p *staticPolicy) getExclusiveAssignedCPUsOnNUMANode(s state.State, numa int) int {
+	n := 0
+	for _, cpuID := range getAssignedExclusiveCPUs(s).UnsortedList() {
+		nodeID, err := p.topology.CPUNUMANodeID(cpuID)
+		if err != nil {
+			continue
+		}
+		if nodeID == numa {
+			n++
+		}
+	}
+	return n
+}
+
 func updateAllocationPerNUMAMetric(logger logr.Logger, topo *topology.CPUTopology, allocatedCPUs cpuset.CPUSet) {
 	numaCount := make(map[int]int)
 

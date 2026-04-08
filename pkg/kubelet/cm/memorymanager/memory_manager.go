@@ -35,6 +35,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/containermap"
 	"k8s.io/kubernetes/pkg/kubelet/cm/memorymanager/state"
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager"
+	tmbitmask "k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
 	"k8s.io/kubernetes/pkg/kubelet/config"
 	"k8s.io/kubernetes/pkg/kubelet/status"
 )
@@ -92,6 +93,12 @@ type Manager interface {
 
 	// GetMemory returns the memory allocated by a container from NUMA nodes
 	GetMemory(podUID, containerName string) []state.Block
+
+	// ComparePreferredSingleNUMAForTopology breaks ties between preferred single-NUMA hints
+	// for topology manager when prefer-most-allocated-numa-node is enabled. Uses regular
+	// memory (ResourceMemory) only—no huge pages. Returns ok=false when the memory manager
+	// does not supply this signal (non-static policy) or when the two NUMAs tie.
+	ComparePreferredSingleNUMAForTopology(current, candidate tmbitmask.BitMask) (preferCandidate bool, ok bool)
 }
 
 type manager struct {
@@ -474,4 +481,24 @@ func (m *manager) GetAllocatableMemory() []state.Block {
 // GetMemory returns the memory allocated by a container from NUMA nodes
 func (m *manager) GetMemory(podUID, containerName string) []state.Block {
 	return m.state.GetMemoryBlocks(podUID, containerName)
+}
+
+func (m *manager) ComparePreferredSingleNUMAForTopology(current, candidate tmbitmask.BitMask) (preferCandidate bool, ok bool) {
+	m.Lock()
+	defer m.Unlock()
+	_, isStatic := m.policy.(*staticPolicy)
+	if !isStatic {
+		return false, false
+	}
+	cb := current.GetBits()
+	ob := candidate.GetBits()
+	if len(cb) != 1 || len(ob) != 1 {
+		return false, false
+	}
+	b0 := getRegularMemoryAssignedBytesOnNUMANode(m.state, cb[0])
+	b1 := getRegularMemoryAssignedBytesOnNUMANode(m.state, ob[0])
+	if b0 == b1 {
+		return false, false
+	}
+	return b1 > b0, true
 }

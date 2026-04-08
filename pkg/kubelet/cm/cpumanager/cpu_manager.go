@@ -34,6 +34,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpumanager/state"
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpumanager/topology"
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager"
+	tmbitmask "k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
 	"k8s.io/kubernetes/pkg/kubelet/config"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/status"
@@ -100,6 +101,11 @@ type Manager interface {
 	// GetAllCPUs returns all the CPUs known by cpumanager, as reported by the
 	// hardware discovery. Maps to the CPU capacity.
 	GetAllCPUs() cpuset.CPUSet
+
+	// ComparePreferredSingleNUMAForTopology breaks ties between preferred single-NUMA hints
+	// for topology manager when prefer-most-allocated-numa-node is enabled. Returns ok=false
+	// when the CPU manager does not supply this signal (non-static policy).
+	ComparePreferredSingleNUMAForTopology(current, candidate tmbitmask.BitMask) (preferCandidate bool, ok bool)
 }
 
 type manager struct {
@@ -542,4 +548,24 @@ func (m *manager) GetExclusiveCPUs(podUID, containerName string) cpuset.CPUSet {
 
 func (m *manager) GetCPUAffinity(podUID, containerName string) cpuset.CPUSet {
 	return m.state.GetCPUSetOrDefault(podUID, containerName)
+}
+
+func (m *manager) ComparePreferredSingleNUMAForTopology(current, candidate tmbitmask.BitMask) (preferCandidate bool, ok bool) {
+	m.Lock()
+	defer m.Unlock()
+	sp, static := m.policy.(*staticPolicy)
+	if !static {
+		return false, false
+	}
+	curBits := current.GetBits()
+	candBits := candidate.GetBits()
+	if len(curBits) != 1 || len(candBits) != 1 {
+		return false, false
+	}
+	c0 := sp.getExclusiveAssignedCPUsOnNUMANode(m.state, curBits[0])
+	c1 := sp.getExclusiveAssignedCPUsOnNUMANode(m.state, candBits[0])
+	if c0 == c1 {
+		return false, false
+	}
+	return c1 > c0, true
 }

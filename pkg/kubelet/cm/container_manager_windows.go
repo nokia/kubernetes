@@ -185,6 +185,7 @@ func NewContainerManager(ctx context.Context, mountUtil mount.Interface, cadviso
 			return nil, err
 		}
 		cm.topologyManager.AddHintProvider(logger, cm.memoryManager)
+		cm.topologyManager.SetPreferredSingleNUMATieBreaker(NewPreferredNUMATieBreakerAggregator(cm.cpuManager, cm.memoryManager))
 	}
 
 	logger.Info("Creating device plugin manager")

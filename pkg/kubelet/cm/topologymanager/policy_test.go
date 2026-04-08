@@ -1557,7 +1557,7 @@ func TestCompareHintsNarrowest(t *testing.T) {
 	for _, tc := range tcases {
 		t.Run(tc.description, func(t *testing.T) {
 			numaInfo := &NUMAInfo{}
-			merger := NewHintMerger(numaInfo, [][]TopologyHint{}, PolicyBestEffort, PolicyOptions{})
+			merger := NewHintMerger(numaInfo, [][]TopologyHint{}, PolicyBestEffort, PolicyOptions{}, nil)
 			merger.BestNonPreferredAffinityCount = tc.bestNonPreferredAffinityCount
 
 			result := merger.compare(tc.current, tc.candidate)
